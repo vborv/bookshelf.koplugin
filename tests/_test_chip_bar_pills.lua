@@ -152,10 +152,12 @@ t.test("pills are sized to their label, not equal shares", function()
     assert(d.home.w < d.recent.w)
 end)
 
-t.test("the trailing action pill is flush with the right edge", function()
+t.test("the pills fill the strip edge to edge", function()
     local d = build()._chip_dimens
+    assert(d.current.x == 0, "first pill starts at the left edge")
     assert(d.search.x + d.search.w == 1000, "search ends at the strip's right edge")
-    assert(d.search.x > d.genres.x + d.genres.w, "and leaves room before it")
+    assert(d.search.x - (d.genres.x + d.genres.w) == 6, "search follows Genres with the normal gap")
+    assert(d.current.w == 78 and d.search.w == 78, "action pills keep their size")
 end)
 
 t.test("only the selected pill is filled", function()

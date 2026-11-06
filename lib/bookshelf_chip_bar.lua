@@ -1658,13 +1658,26 @@ function ChipBar:_buildPillRow(render_chips, flex_indices, flex_naturals, action
         end
     end
 
-    -- Everything up to the last shelf pill / chevron runs from the left;
-    -- action pills after that are pushed to the right edge.
-    local last_left = 0
+    -- Fill the whole strip: the room left over after the natural widths and
+    -- the gaps is shared equally among the shelf pills (action pills and
+    -- chevrons keep their size), so the row runs edge to edge and each pill
+    -- stays proportional to its label.
+    local used = gap * math.max(0, n - 1)
+    local stretch = {}
     for i, chip in ipairs(render_chips) do
-        if (not chip.action) or chip._page_dir then last_left = i end
+        used = used + widths[i]
+        if not chip.action then stretch[#stretch + 1] = i end
     end
-    if last_left == 0 then last_left = n end
+    local extra = self.width - used
+    if extra > 0 and #stretch > 0 then
+        local each = math.floor(extra / #stretch)
+        for k, i in ipairs(stretch) do
+            widths[i] = widths[i] + each
+            if k == #stretch then
+                widths[i] = widths[i] + (extra - each * #stretch)
+            end
+        end
+    end
 
     local function isFilled(c)
         if c._page_dir then return false end
@@ -1733,15 +1746,7 @@ function ChipBar:_buildPillRow(render_chips, flex_indices, flex_naturals, action
     local row = HorizontalGroup:new{ allow_mirroring = false }
     local x = 0
     for i, chip in ipairs(render_chips) do
-        if i == last_left + 1 then
-            -- Push the trailing actions to the right edge.
-            local right_w = 0
-            for k = i, n do right_w = right_w + widths[k] end
-            right_w = right_w + gap * (n - i)
-            local spacer = math.max(gap, self.width - x - right_w)
-            row[#row + 1] = HorizontalSpan:new{ width = spacer }
-            x = x + spacer
-        elseif i > 1 then
+        if i > 1 then
             row[#row + 1] = HorizontalSpan:new{ width = gap }
             x = x + gap
         end
