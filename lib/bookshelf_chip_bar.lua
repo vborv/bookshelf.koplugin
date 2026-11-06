@@ -67,6 +67,17 @@ local function _scaled(n)
     return BandMetrics.scaled(n, BandMetrics.CHIP_KEY)
 end
 
+-- ── Pill style (fork addition) ──────────────────────────────────────────────
+-- Separate rounded pills with a gap between them instead of the joined
+-- segmented bar. On by default; the "Pill-style tabs" setting
+-- (chip_pill_style) turns it off. All the pill code lives in
+-- ChipBar:_buildPillRow below, so the original layout is untouched and
+-- upstream updates should merge with a couple of lines of conflict at most.
+local function _pillMode()
+    return BookshelfSettings.nilOrTrue("chip_pill_style")
+end
+local function _pillGap() return Space.px(6) end
+
 -- A TextWidget's max_width must be STRICTLY POSITIVE: KOReader's text layout
 -- (TextWidget -> makeLine) aborts with "width must be strictly positive" on a
 -- zero or negative width. At a very large chip-bar font on a narrow screen the
@@ -1055,11 +1066,13 @@ function ChipBar:_initChips()
 
     local paper       = Blitbuffer.COLOR_WHITE
     local LineWidget  = require("ui/widget/linewidget")
-    local separator_w = Size.border.thin
+    local pills       = _pillMode()
+    local separator_w = pills and _pillGap() or Size.border.thin
 
     -- Fixed-width action chips (search, currently-reading, etc.).
     -- 1.6x strip height so the tap target is comfortable on touch.
-    local action_w = math.floor(self.height * 1.6)
+    -- (Pills: 1.3x, they are rounded and need less width.)
+    local action_w = math.floor(self.height * (pills and 1.3 or 1.6))
     local flex_indices = {}   -- indices into self.chips of non-action chips, in order
     for i, c in ipairs(self.chips) do
         if not c.action then flex_indices[#flex_indices + 1] = i end
@@ -1193,6 +1206,10 @@ function ChipBar:_buildChipRow(flex_indices, flex_naturals, action_w, separator_
         if chip.action and i > last_flex_idx then
             render_chips[#render_chips + 1] = chip
         end
+    end
+
+    if _pillMode() then
+        return self:_buildPillRow(render_chips, flex_indices, flex_naturals, action_w)
     end
 
     -- Chevron cells are narrower than the action buttons (see _initChips).
@@ -1601,6 +1618,140 @@ function ChipBar:_buildChipRow(flex_indices, flex_naturals, action_w, separator_
     self[1] = FrameContainer:new{
         bordersize = Size.border.thin,
         color      = _stripInk(),
+        margin     = 0,
+        padding    = 0,
+        row,
+    }
+end
+
+-- Pill layout (fork addition): every chip is its own rounded, outlined pill,
+-- sized to its label, with a gap between pills. The selected pill is filled.
+-- Leading and shelf pills run from the left; trailing action pills (search)
+-- sit flush right. No pointer/roof. Reuses render_chips, the pagination and
+-- the tap/hold hit-testing (_chip_dimens) built by the original code.
+function ChipBar:_buildPillRow(render_chips, flex_indices, flex_naturals, action_w)
+    local h        = self.height
+    local gap      = _pillGap()
+    local chevron_w = self._chevron_w or action_w
+    local n        = #render_chips
+    local ground   = _stripGround()
+    local line_c   = _stripInk()
+
+    self._band_w = nil
+    self._chip_dimens = {}
+
+    -- Natural width of each shelf pill, by key, from the measurements the
+    -- pagination was planned with.
+    local natural_by_key = {}
+    for j, idx in ipairs(flex_indices or {}) do
+        natural_by_key[self.chips[idx].key] = flex_naturals[j]
+    end
+
+    local widths = {}
+    for i, chip in ipairs(render_chips) do
+        if chip._page_dir then
+            widths[i] = chevron_w
+        elseif chip.action then
+            widths[i] = action_w
+        else
+            widths[i] = natural_by_key[chip.key] or measureNatural(chip, h, _scaled)
+        end
+    end
+
+    -- Everything up to the last shelf pill / chevron runs from the left;
+    -- action pills after that are pushed to the right edge.
+    local last_left = 0
+    for i, chip in ipairs(render_chips) do
+        if (not chip.action) or chip._page_dir then last_left = i end
+    end
+    if last_left == 0 then last_left = n end
+
+    local function isFilled(c)
+        if c._page_dir then return false end
+        if c.action then return c.selected and true or false end
+        return c.key == self.active
+    end
+
+    local function buildPill(chip, w)
+        local is_active  = isFilled(chip)
+        local is_pending = self._pending_key == chip.key
+        local has_focus  = (self.focused_key == chip.key)
+
+        local fill_c, ink_c
+        if is_active then fill_c, ink_c = _activeChipColors() end
+        local has_custom = (type(fill_c) ~= "nil")
+
+        -- Painted for real (not the rect inversion of the segmented bar): an
+        -- inverted rect would also flip the pixels outside the rounded corners.
+        local fill, ink
+        if is_active then
+            fill = has_custom and fill_c or line_c
+            ink  = has_custom and ink_c or ground
+        else
+            fill = nil
+            ink  = _chipInk()
+        end
+        local border_c = is_active and (has_custom and Blitbuffer.COLOR_BLACK or line_c) or line_c
+        local bs = (is_pending or has_focus) and Size.border.thick or Size.border.thin
+
+        local content
+        if chip.nerd_glyph then
+            local f, b = _iconFace(_scaled(18))
+            content = TextWidget:new{ text = chip.nerd_glyph, face = f, bold = b, fgcolor = ink }
+        elseif chip.icon then
+            local IconWidget = require("ui/widget/iconwidget")
+            local side = math.floor(h * 0.6)
+            content = IconWidget:new{ icon = chip.icon, width = side, height = side }
+            -- The icon is black line art. On the default (black) selected
+            -- pill, flip just the icon's own square so it reads white on black.
+            if is_active and not has_custom then
+                content = InvertedFrame:new{
+                    _invert = true, bordersize = 0, margin = 0, padding = 0,
+                    background = Blitbuffer.COLOR_WHITE,
+                    content,
+                }
+            end
+        else
+            content = _buildLabelContent(chip.label or "", _scaled(16),
+                w - 2 * Space.padding.small - 2 * bs, ink, false)
+        end
+
+        return FrameContainer:new{
+            radius     = math.floor(h / 2),
+            bordersize = bs,
+            color      = border_c,
+            background = fill,
+            margin     = 0,
+            padding    = 0,
+            CenterContainer:new{
+                dimen = Geom:new{ w = w - 2 * bs, h = h - 2 * bs },
+                content,
+            },
+        }
+    end
+
+    local row = HorizontalGroup:new{ allow_mirroring = false }
+    local x = 0
+    for i, chip in ipairs(render_chips) do
+        if i == last_left + 1 then
+            -- Push the trailing actions to the right edge.
+            local right_w = 0
+            for k = i, n do right_w = right_w + widths[k] end
+            right_w = right_w + gap * (n - i)
+            local spacer = math.max(gap, self.width - x - right_w)
+            row[#row + 1] = HorizontalSpan:new{ width = spacer }
+            x = x + spacer
+        elseif i > 1 then
+            row[#row + 1] = HorizontalSpan:new{ width = gap }
+            x = x + gap
+        end
+        row[#row + 1] = buildPill(chip, widths[i])
+        self._chip_dimens[chip.key] = { x = x, w = widths[i] }
+        x = x + widths[i]
+    end
+
+    self[1] = FrameContainer:new{
+        bordersize = 0,
         margin     = 0,
         padding    = 0,
         row,

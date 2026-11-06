@@ -6205,6 +6205,20 @@ function Settings:_tabsMenuItems()
     -- Shelf menu font scale moved to Settings -> Text size (#60).
     local items = {
         {
+            text = _("Pill-style tabs"),
+            help_text = _("On: each shelf button is a separate rounded pill, sized to its label. "
+                .. "Off: the original joined segmented bar."),
+            checked_func   = function()
+                return BookshelfSettings.nilOrTrue("chip_pill_style")
+            end,
+            keep_menu_open = true,
+            callback = function()
+                local on = BookshelfSettings.nilOrTrue("chip_pill_style")
+                BookshelfSettings.save("chip_pill_style", not on)
+                rebuild()
+            end,
+        },
+        {
             text = _("Flexible shelf widths"),
             help_text = _("Off: every shelf gets the same width. On: each "
                 .. "shelf is sized to its label, so single-icon shelves stay "
